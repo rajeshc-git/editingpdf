@@ -1,0 +1,6 @@
+# Keep the Go build context minimal.
+Dockerfile
+Makefile
+*.md
+.env
+.env.*

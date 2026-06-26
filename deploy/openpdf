@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# open-pdf operational helper.
+#
+# Usage:
+#   ./openpdf logs [service]   Stream timestamped logs (all services or one).
+#   ./openpdf status           Show service/health status.
+#   ./openpdf update           Pull/rebuild latest images and recreate app services.
+#   ./openpdf restart          Restart all services.
+#   ./openpdf down             Stop the stack (volumes are preserved).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.prod.yml"
+
+[ -f "$ENV_FILE" ] || { echo "openpdf: ${ENV_FILE} not found. Run install.sh first." >&2; exit 1; }
+
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
+
+# Include overrides that match how the stack was installed.
+TLS_OVERRIDE="${SCRIPT_DIR}/docker-compose.tls.yml"
+DATA_OVERRIDE="${SCRIPT_DIR}/docker-compose.data.yml"
+_domain="$(sed -n 's/^OPENPDF_DOMAIN=//p' "$ENV_FILE" | head -n1)"
+_with_data="$(sed -n 's/^OPENPDF_WITH_DATA=//p' "$ENV_FILE" | head -n1)"
+compose() {
+  local files=(-f "$COMPOSE_FILE")
+  [ "$_with_data" = "true" ] && [ -f "$DATA_OVERRIDE" ] && files+=(-f "$DATA_OVERRIDE")
+  [ -n "$_domain" ] && [ -f "$TLS_OVERRIDE" ] && files+=(-f "$TLS_OVERRIDE")
+  $SUDO docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
+}
+
+APP_SERVICES="web api-gateway pdf-engine"
+
+cmd="${1:-status}"; shift || true
+
+case "$cmd" in
+  logs)
+    # Timestamped, service-prefixed log stream.
+    compose logs -f --timestamps "$@"
+    ;;
+  status)
+    compose ps
+    ;;
+  update)
+    echo "[open-pdf] Fetching latest source..."
+    if git -C "$SCRIPT_DIR/.." rev-parse --git-dir >/dev/null 2>&1; then
+      git -C "$SCRIPT_DIR/.." pull --ff-only || { echo "openpdf: git pull failed; leaving current version running." >&2; exit 1; }
+    fi
+    echo "[open-pdf] Rebuilding images..."
+    compose build $APP_SERVICES || { echo "openpdf: build failed; previous version still running." >&2; exit 1; }
+    compose up -d --no-deps $APP_SERVICES || { echo "openpdf: restart failed; previous version still running." >&2; exit 1; }
+    echo "[open-pdf] Update complete. Secrets and data volumes were left unchanged."
+    compose ps
+    ;;
+  restart)
+    compose restart "$@"
+    ;;
+  down)
+    compose down
+    ;;
+  *)
+    echo "Unknown command '$cmd'. Use: logs | status | update | restart | down" >&2
+    exit 1
+    ;;
+esac

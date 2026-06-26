@@ -1,0 +1,112 @@
+# Production stack for open-pdf (lean default).
+#
+# Only the services the app actually uses run by default: Caddy (router),
+# web (Next.js), api-gateway (Go), pdf-engine (Rust). The datastores
+# (PostgreSQL/Redis/NATS/MinIO) are NOT started here because the current
+# api-gateway does not connect to them. Enable them when needed by adding
+# the data override:  -f docker-compose.data.yml  (installer: --with-data).
+#
+# - No dev watch/rebuild blocks.
+# - Only Caddy publishes a host port. Everything else stays on the private network.
+# Build contexts are relative to this file (deploy/), so ".." is the repo root.
+
+name: openpdf
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    <<: *default-restart
+    ports:
+      - "${HTTP_PUBLISH:-80}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - openpdf-prod
+    logging: *default-logging
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        NEXT_PUBLIC_PDF_ENGINE_URL: ${NEXT_PUBLIC_PDF_ENGINE_URL:-/pdf}
+    image: editingpdf-web:latest
+    <<: *default-restart
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      # Cap the V8 heap so SSR memory stays bounded on small VPSes.
+      - NODE_OPTIONS=--max-old-space-size=384
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    networks:
+      - openpdf-prod
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  api-gateway:
+    build:
+      context: ../apps/api-gateway
+      dockerfile: Dockerfile
+    image: editingpdf-api-gateway:latest
+    <<: *default-restart
+    environment:
+      - PORT=8080
+      - JWT_SECRET=${JWT_SECRET}
+    networks:
+      - openpdf-prod
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+
+  pdf-engine:
+    build:
+      context: ../apps/pdf-engine
+      dockerfile: Dockerfile
+    image: editingpdf-pdf-engine:latest
+    <<: *default-restart
+    environment:
+      - RUST_LOG=info
+    networks:
+      - openpdf-prod
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+
+volumes:
+  caddy-data:
+  caddy-config:
+
+networks:
+  openpdf-prod:
+    driver: bridge

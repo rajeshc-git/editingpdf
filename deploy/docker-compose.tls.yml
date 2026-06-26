@@ -1,0 +1,12 @@
+# TLS override — used only in self-managed HTTPS mode (when you pass --domain
+# to install.sh and Caddy obtains its own Let's Encrypt certificate).
+#
+# Merged on top of docker-compose.prod.yml to additionally publish 443 so
+# Caddy can serve HTTPS directly. Do NOT use this when your VPS provider
+# already terminates SSL in front of the VPS — in that "behind a managed
+# proxy" setup the base file publishes a single HTTP port instead.
+services:
+  caddy:
+    ports:
+      - "443:443"
+      - "443:443/udp"

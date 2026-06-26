@@ -1,0 +1,43 @@
+# Keep the Docker build context small: this is what gets sent to the daemon
+# for the web image (build context = repo root). Excluding these massively
+# reduces build memory, disk, and time on a small VPS.
+
+# Dependencies (reinstalled inside the image)
+**/node_modules
+.pnpm-store
+
+# Build outputs
+**/.next
+**/dist
+**/out
+**/build
+**/target
+**/*.tsbuildinfo
+
+# Turbo / caches
+**/.turbo
+.eslintcache
+coverage
+.nyc_output
+
+# VCS / CI / tooling
+.git
+.github
+.gitignore
+.gitattributes
+.husky
+.vscode
+.idea
+
+# Project meta not needed in the image
+.kiro
+deploy
+README.md
+**/*.md
+**/.env
+**/.env.*
+
+# Logs / OS cruft
+**/*.log
+.DS_Store
+Thumbs.db

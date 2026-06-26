@@ -1,0 +1,7 @@
+# Shell scripts and deploy artifacts must use LF so they run on Linux hosts.
+*.sh text eol=lf
+deploy/openpdf text eol=lf
+deploy/install.sh text eol=lf
+deploy/Caddyfile* text eol=lf
+docker-compose*.yml text eol=lf
+Dockerfile text eol=lf

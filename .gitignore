@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+.next
+out
+build
+target
+
+# Cache
+.turbo
+.eslintcache
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Generated deploy artifacts
+deploy/Caddyfile
+
+# Kiro spec docs (kept locally, not needed in the repo)
+.kiro/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage
+.nyc_output
+
+# Logs
+*.log
+npm-debug.log*
