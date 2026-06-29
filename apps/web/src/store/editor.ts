@@ -5,13 +5,15 @@ import { create } from 'zustand'
 export const PAGE_WIDTH = 595
 export const PAGE_HEIGHT = 842
 
+// Gap between pages when viewing multi-page documents (in PDF points)
+export const PAGE_GAP = 20
+
 // Common page presets (in PDF points, 72pt = 1in)
 export const PAGE_PRESETS: { id: string; label: string; width: number; height: number }[] = [
   { id: 'a4', label: 'A4', width: 595, height: 842 },
   { id: 'letter', label: 'US Letter', width: 612, height: 792 },
   { id: 'legal', label: 'US Legal', width: 612, height: 1008 },
-  { id: 'a3', label: 'A3', width: 842, height: 1191 },
-  { id: 'a5', label: 'A5', width: 420, height: 595 },
+  { id: 'b4', label: 'B4', width: 709, height: 1001 },
   { id: 'square', label: 'Square', width: 595, height: 595 },
 ]
 
@@ -137,6 +139,12 @@ interface EditorStore {
   pageWidth: number
   pageHeight: number
 
+  // individual page dimensions for multi-page documents
+  pages: { width: number; height: number }[]
+
+  // original imported PDF page size to allow returning to original dimensions
+  originalPageSize: { width: number; height: number } | null
+
   // bumped whenever the document/page changes, so the canvas can re-center
   docVersion: number
 
@@ -152,11 +160,12 @@ interface EditorStore {
   setZoom: (zoom: number) => void
   setPan: (x: number, y: number) => void
   fitToContainer: (containerWidth: number, containerHeight: number) => void
+  scrollToPage: (pageIndex: number) => void
 
   // document actions
   setPageSize: (width: number, height: number) => void
   newDocument: (opts?: { width?: number; height?: number }) => void
-  loadDocument: (nodes: EditorNode[], width: number, height: number) => void
+  loadDocument: (nodes: EditorNode[], width: number, height: number, pages?: { width: number; height: number }[]) => void
 
   // history
   pushHistory: () => void
@@ -213,6 +222,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   pageWidth: PAGE_WIDTH,
   pageHeight: PAGE_HEIGHT,
 
+  pages: [{ width: PAGE_WIDTH, height: PAGE_HEIGHT }],
+  originalPageSize: null,
+
   docVersion: 0,
 
   past: [],
@@ -223,25 +235,63 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setZoom: (zoom) => set({ zoom: Math.min(10, Math.max(0.1, zoom)) }),
   setPan: (panX, panY) => set({ panX, panY }),
 
-  // Center the page in the viewport and scale it to fit with a small margin.
+  // Center the first page in the viewport and scale it to fit with a small margin.
   fitToContainer: (cw, ch) =>
     set((s) => {
       if (cw <= 0 || ch <= 0) return s
-      const fit = Math.min(cw / s.pageWidth, ch / s.pageHeight) * 0.9
+      // Fit to the FIRST page instead of the cumulative multi-page height
+      const pg = s.pages[0] ?? { width: s.pageWidth, height: s.pageHeight }
+      const fit = Math.min(cw / pg.width, ch / pg.height) * 0.9
       const zoom = Math.min(10, Math.max(0.1, fit))
       return {
         zoom,
-        panX: (cw - s.pageWidth * zoom) / 2,
-        panY: (ch - s.pageHeight * zoom) / 2,
+        panX: (cw - pg.width * zoom) / 2,
+        panY: 30, // standard offset from top
+      }
+    }),
+
+  // Panned to specific page index and centered
+  scrollToPage: (pageIndex) =>
+    set((s) => {
+      if (pageIndex < 0 || pageIndex >= s.pages.length) return {}
+      const pg = s.pages[pageIndex]!
+      
+      const el = typeof document !== 'undefined' ? document.querySelector('.canvas-container') : null
+      const cw = el ? el.clientWidth : 800
+      const ch = el ? el.clientHeight : 600
+
+      // Calculate start Y of this page
+      let pageYStart = 0
+      for (let i = 0; i < pageIndex; i++) {
+        pageYStart += s.pages[i]!.height + PAGE_GAP
+      }
+
+      // Calculate new pan to fit this page in viewport
+      const fit = Math.min(cw / pg.width, ch / pg.height) * 0.9
+      const zoom = Math.min(10, Math.max(0.1, fit))
+
+      return {
+        zoom,
+        panX: (cw - pg.width * zoom) / 2,
+        panY: -pageYStart * zoom + 30
       }
     }),
 
   setPageSize: (width, height) =>
-    set((s) => ({
-      pageWidth: Math.max(1, width),
-      pageHeight: Math.max(1, height),
-      docVersion: s.docVersion + 1,
-    })),
+    set((s) => {
+      const newWidth = Math.max(1, width)
+      const newHeight = Math.max(1, height)
+      // Resize each page in the pages array
+      const updatedPages = s.pages.map(() => ({ width: newWidth, height: newHeight }))
+      // Recalculate total stacked height
+      const totalHeight = updatedPages.reduce((acc, p, idx) => acc + p.height + (idx > 0 ? PAGE_GAP : 0), 0)
+      return {
+        pageWidth: newWidth,
+        pageHeight: totalHeight,
+        pages: updatedPages,
+        docVersion: s.docVersion + 1,
+      }
+    }),
 
   newDocument: (opts) =>
     set((s) => ({
@@ -258,26 +308,34 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       tool: 'select',
       pageWidth: opts?.width ?? PAGE_WIDTH,
       pageHeight: opts?.height ?? PAGE_HEIGHT,
+      pages: [{ width: opts?.width ?? PAGE_WIDTH, height: opts?.height ?? PAGE_HEIGHT }],
+      originalPageSize: null,
       docVersion: s.docVersion + 1,
     })),
 
-  loadDocument: (nodes, width, height) =>
-    set((s) => ({
-      nodes,
-      selectedIds: [],
-      hoveredId: null,
-      editingId: null,
-      past: [],
-      future: [],
-      createdCount: nodes.length,
-      zoom: 1,
-      panX: 60,
-      panY: 60,
-      tool: 'select',
-      pageWidth: Math.max(1, width),
-      pageHeight: Math.max(1, height),
-      docVersion: s.docVersion + 1,
-    })),
+  loadDocument: (nodes, width, height, pages) =>
+    set((s) => {
+      const pageList = pages ?? [{ width: Math.max(1, width), height: Math.max(1, height) }]
+      const firstPg = pageList[0]!
+      return {
+        nodes,
+        selectedIds: [],
+        hoveredId: null,
+        editingId: null,
+        past: [],
+        future: [],
+        createdCount: nodes.length,
+        zoom: 1,
+        panX: 60,
+        panY: 60,
+        tool: 'select',
+        pageWidth: Math.max(1, width),
+        pageHeight: Math.max(1, height),
+        pages: pageList,
+        originalPageSize: { width: firstPg.width, height: firstPg.height },
+        docVersion: s.docVersion + 1,
+      }
+    }),
 
   pushHistory: () =>
     set((s) => ({

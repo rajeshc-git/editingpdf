@@ -185,9 +185,6 @@ function drawText(ctx: AnyCtx, node: EditorNode): void {
   const color = node.fill.type === 'solid' && node.fill.color ? node.fill.color : '#18181b'
 
   ctx.save()
-  ctx.beginPath()
-  ctx.rect(node.x, node.y, node.width, node.height)
-  ctx.clip()
 
   ctx.fillStyle = color
   ctx.font = `${style.fontWeight} ${style.fontSize}px ${style.fontFamily}`
@@ -200,7 +197,8 @@ function drawText(ctx: AnyCtx, node: EditorNode): void {
   else if (style.textTransform === 'lowercase') text = text.toLowerCase()
 
   const lineHeight = style.fontSize * style.lineHeight
-  const lines = wrapText(ctx, text, node.width)
+  // Only split by explicit newlines to prevent unwanted word wrapping
+  const lines = text.split('\n')
   const totalHeight = lines.length * lineHeight
   let startY = node.y
   if (style.verticalAlign === 'middle') startY = node.y + (node.height - totalHeight) / 2

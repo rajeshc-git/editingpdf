@@ -1,13 +1,18 @@
 'use client'
 
-import { createNode, DEFAULT_TEXT_STYLE, type EditorNode } from '@/store/editor'
+import { createNode, DEFAULT_TEXT_STYLE, PAGE_GAP, type EditorNode } from '@/store/editor'
 
 export interface ImportedPdf {
   nodes: EditorNode[]
   pageWidth: number
   pageHeight: number
   pageCount: number
+  importedPages: number
+  pages: { width: number; height: number }[]
 }
+
+// Maximum number of pages to import at once
+const MAX_PAGES = 10
 
 // PDF transform composition (matches pdfjs Util.transform: result = m1 x m2)
 function mul(m1: number[], m2: number[]): number[] {
@@ -89,51 +94,114 @@ async function getImageObject(
   })
 }
 
-export async function importPdf(file: File | ArrayBuffer): Promise<ImportedPdf> {
-  // Lazy-load pdf.js so it stays out of the initial page bundle.
-  const pdfjsLib = await import('pdfjs-dist')
-  if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
-  }
-
-  const data = file instanceof ArrayBuffer ? file : await file.arrayBuffer()
-  const pdf = await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise
-  const page = await pdf.getPage(1)
-  const viewport = page.getViewport({ scale: 1 })
-  const pageWidth = viewport.width
-  const pageHeight = viewport.height
-
+/**
+ * Extract text and image nodes from a single PDF page.
+ * All Y coordinates are offset by `yOffset` so pages can be stacked vertically.
+ */
+async function extractPageNodes(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pdfjsLib: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  page: any,
+  pageHeight: number,
+  yOffset: number,
+  startCount: number,
+): Promise<{ nodes: EditorNode[]; count: number }> {
   const nodes: EditorNode[] = []
-  let count = 0
+  let count = startCount
 
   // ---- Text -> editable text nodes ----
   try {
     const textContent = await page.getTextContent()
+    const rawItems: {
+      str: string
+      x: number
+      y: number
+      width: number
+      fontSize: number
+      fontFamily: string
+    }[] = []
+
     for (const raw of textContent.items as Array<Record<string, unknown>>) {
       if (!('str' in raw)) continue
       const str = String(raw.str ?? '')
       if (!str.trim()) continue
       const t = raw.transform as number[]
       if (!t || t.length < 6) continue
-      const fontSize = Math.hypot(t[2]!, t[3]!) || Math.abs(t[3]!) || 12
+      // Scale down font size slightly to compensate for wider browser fallback fonts
+      const fontSize = (Math.hypot(t[2]!, t[3]!) || Math.abs(t[3]!) || 12) * 0.94
       const x = t[4]!
       const baseline = t[5]!
       const top = pageHeight - baseline - fontSize
       const itemWidth = typeof raw.width === 'number' ? (raw.width as number) : str.length * fontSize * 0.5
+
+      // Extract font family from PDF metadata
+      const fontName = String(raw.fontName ?? '')
+      const styleObj = (textContent.styles as Record<string, any>)?.[fontName]
+      const fontFamily = styleObj?.fontFamily ?? 'sans-serif'
+      
+      rawItems.push({
+        str,
+        x,
+        y: top,
+        width: itemWidth * 0.94, // also scale item width to match scaled font size
+        fontSize,
+        fontFamily,
+      })
+    }
+
+    // Sort items by Y (top to bottom), then by X (left to right)
+    rawItems.sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 3) {
+        return a.y - b.y
+      }
+      return a.x - b.x
+    })
+
+    // Merge adjacent text items on the same horizontal line
+    const mergedLines: typeof rawItems = []
+    for (const item of rawItems) {
+      if (mergedLines.length === 0) {
+        mergedLines.push(item)
+        continue
+      }
+      const last = mergedLines[mergedLines.length - 1]!
+      const sameLine = Math.abs(last.y - item.y) <= 3
+      const closeHorizontal = item.x - (last.x + last.width) <= item.fontSize * 1.8
+
+      if (sameLine && closeHorizontal) {
+        const needsSpace =
+          !last.str.endsWith(' ') &&
+          !item.str.startsWith(' ') &&
+          (item.x - (last.x + last.width) > 2)
+
+        last.str += (needsSpace ? ' ' : '') + item.str
+        last.width = (item.x + item.width) - last.x
+        // Keep the larger font size if they differ slightly
+        last.fontSize = Math.max(last.fontSize, item.fontSize)
+      } else {
+        mergedLines.push(item)
+      }
+    }
+
+    // Create editable nodes from the merged lines
+    for (const line of mergedLines) {
+      const bufferedWidth = line.width * 1.12 + 8
       const node = createNode(
         'text',
-        x,
-        Math.max(0, top),
-        Math.max(itemWidth, 4),
-        fontSize * 1.35,
+        line.x,
+        Math.max(0, line.y) + yOffset,
+        Math.max(bufferedWidth, 4),
+        line.fontSize * 1.35,
         ++count
       )
-      node.text = str
-      node.name = str.slice(0, 24).trim() || 'Text'
+      node.text = line.str
+      node.name = line.str.slice(0, 24).trim() || 'Text'
       node.fill = { type: 'solid', color: '#18181b' }
       node.textStyle = {
         ...DEFAULT_TEXT_STYLE,
-        fontSize,
+        fontFamily: line.fontFamily,
+        fontSize: line.fontSize,
         lineHeight: 1.15,
         textAlign: 'left',
       }
@@ -186,7 +254,7 @@ export async function importPdf(file: File | ArrayBuffer): Promise<ImportedPdf> 
       const src = imageToDataURL(imgObj)
       if (!src) continue
 
-      const node = createNode('image', x, Math.max(0, top), w, h, ++count)
+      const node = createNode('image', x, Math.max(0, top) + yOffset, w, h, ++count)
       node.src = src
       node.fit = 'fill'
       node.name = 'Image'
@@ -202,5 +270,60 @@ export async function importPdf(file: File | ArrayBuffer): Promise<ImportedPdf> 
     return rank(a) - rank(b)
   })
 
-  return { nodes, pageWidth, pageHeight, pageCount: pdf.numPages }
+  return { nodes, count }
 }
+
+export async function importPdf(file: File | ArrayBuffer): Promise<ImportedPdf> {
+  // Lazy-load pdf.js so it stays out of the initial page bundle.
+  const pdfjsLib = await import('pdfjs-dist')
+  if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
+  }
+
+  const data = file instanceof ArrayBuffer ? file : await file.arrayBuffer()
+  const pdf = await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise
+  const pagesToImport = Math.min(pdf.numPages, MAX_PAGES)
+
+  const allNodes: EditorNode[] = []
+  const pages: { width: number; height: number }[] = []
+  let maxPageWidth = 0
+  let totalHeight = 0
+  let count = 0
+
+  for (let pageNum = 1; pageNum <= pagesToImport; pageNum++) {
+    const page = await pdf.getPage(pageNum)
+    const viewport = page.getViewport({ scale: 1 })
+    const pageWidth = viewport.width
+    const pageHeight = viewport.height
+
+    maxPageWidth = Math.max(maxPageWidth, pageWidth)
+    pages.push({ width: pageWidth, height: pageHeight })
+
+    // Add gap between pages
+    if (pageNum > 1) {
+      totalHeight += PAGE_GAP
+    }
+
+    const { nodes, count: newCount } = await extractPageNodes(
+      pdfjsLib,
+      page,
+      pageHeight,
+      totalHeight,
+      count,
+    )
+    count = newCount
+    allNodes.push(...nodes)
+
+    totalHeight += pageHeight
+  }
+
+  return {
+    nodes: allNodes,
+    pageWidth: maxPageWidth,
+    pageHeight: totalHeight,
+    pageCount: pdf.numPages,
+    importedPages: pagesToImport,
+    pages,
+  }
+}
+

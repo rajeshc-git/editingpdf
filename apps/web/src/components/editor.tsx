@@ -9,13 +9,11 @@ import { Canvas } from './canvas'
 import { LegalLinks } from './legal'
 import { Logo } from './logo'
 import { Sidebar } from './sidebar'
+import { Thumbnails } from './thumbnails'
 import { Toolbar } from './toolbar'
 
 const SHORTCUT_TOOLS: Record<string, Tool> = {
   v: 'select',
-  f: 'frame',
-  r: 'rectangle',
-  o: 'ellipse',
   t: 'text',
   i: 'image',
   h: 'hand',
@@ -25,12 +23,6 @@ export function Editor() {
   const [exporting, setExporting] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
-  const selectedCount = useEditorStore((s) => s.selectedIds.length)
-
-  // Auto-open the properties drawer on mobile when something is selected
-  useEffect(() => {
-    if (selectedCount > 0) setPanelOpen(true)
-  }, [selectedCount])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -159,17 +151,24 @@ export function Editor() {
         </div>
       </header>
 
-      <div className="relative flex flex-1 overflow-hidden">
+      {/* Tool strip below header — mobile only */}
+      <div className="flex shrink-0 items-center justify-center border-b border-neutral-200 bg-white px-2 py-1 md:hidden dark:border-neutral-800 dark:bg-neutral-950">
         <Toolbar />
+      </div>
+
+      <div className="relative flex flex-1 overflow-hidden">
+        {/* Toolbar as vertical sidebar — desktop only */}
+        <div className="hidden md:flex">
+          <Toolbar />
+        </div>
+        <Thumbnails />
         <Canvas />
         <Sidebar open={panelOpen} onClose={() => setPanelOpen(false)} />
-        {/* Small-font legal line — bottom-left. On mobile it sits just above the
-            bottom toolbar (and the device safe-area inset), width-capped so it
-            never runs under the zoom panel on the right. On desktop it clears
+        {/* Small-font legal line — bottom-left. On desktop it clears
             the left tool sidebar with a small gap. */}
         <LegalLinks
           align="start"
-          className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+5rem)] left-3 z-10 flex max-w-[calc(100%-12rem)] md:bottom-3 md:left-[3.75rem] md:max-w-none"
+          className="pointer-events-auto absolute bottom-3 left-3 z-10 flex max-w-[calc(100%-12rem)] md:left-[3.75rem] md:max-w-none"
         />
       </div>
     </div>

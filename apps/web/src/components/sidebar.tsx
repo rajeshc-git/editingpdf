@@ -3,16 +3,11 @@
 import { importPdf } from '@/lib/import-pdf'
 import { PAGE_PRESETS, useEditorStore, type EditorNode } from '@/store/editor'
 import {
-  BringToFront,
-  Copy,
   Eye,
   EyeOff,
   FilePlus2,
   Loader2,
-  Lock,
-  SendToBack,
-  Trash2,
-  Unlock,
+  Pencil,
   Upload,
   X,
 } from 'lucide-react'
@@ -202,10 +197,11 @@ function Properties({ node }: { node: EditorNode }) {
   )
 }
 
-function LayerRow({ node }: { node: EditorNode }) {
+function LayerRow({ node, onClose }: { node: EditorNode; onClose?: (() => void) | undefined }) {
   const selectedIds = useEditorStore((s) => s.selectedIds)
   const select = useEditorStore((s) => s.select)
   const updateNode = useEditorStore((s) => s.updateNode)
+  const setEditing = useEditorStore((s) => s.setEditing)
   const selected = selectedIds.includes(node.id)
 
   return (
@@ -218,7 +214,7 @@ function LayerRow({ node }: { node: EditorNode }) {
       }`}
     >
       <span className="truncate">{node.name}</span>
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1.5">
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -229,16 +225,20 @@ function LayerRow({ node }: { node: EditorNode }) {
         >
           {node.visible ? <Eye size={14} /> : <EyeOff size={14} />}
         </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            updateNode(node.id, { locked: !node.locked })
-          }}
-          className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
-          title={node.locked ? 'Unlock' : 'Lock'}
-        >
-          {node.locked ? <Lock size={14} /> : <Unlock size={14} />}
-        </button>
+        {node.type === 'text' && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              select([node.id])
+              setEditing(node.id)
+              onClose?.()
+            }}
+            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+            title="Edit text"
+          >
+            <Pencil size={13} />
+          </button>
+        )}
       </span>
     </div>
   )
@@ -248,18 +248,48 @@ function DocumentPanel() {
   const pageWidth = useEditorStore((s) => s.pageWidth)
   const pageHeight = useEditorStore((s) => s.pageHeight)
   const newDocument = useEditorStore((s) => s.newDocument)
+  const setPageSize = useEditorStore((s) => s.setPageSize)
   const loadDocument = useEditorStore((s) => s.loadDocument)
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const activePreset =
-    PAGE_PRESETS.find((p) => p.width === pageWidth && p.height === pageHeight)?.id ?? 'custom'
+  const originalPageSize = useEditorStore((s) => s.originalPageSize)
+
+  const pages = useEditorStore((s) => s.pages)
+  const firstPage = pages[0]
+
+  // Construct dynamic presets including the original PDF size if loaded
+  const presets = [...PAGE_PRESETS]
+  if (originalPageSize) {
+    const isStandard = PAGE_PRESETS.some(
+      (p) =>
+        Math.abs(p.width - originalPageSize.width) <= 5 &&
+        Math.abs(p.height - originalPageSize.height) <= 5
+    )
+    if (!isStandard) {
+      presets.push({
+        id: 'original',
+        label: `Custom (${Math.round(originalPageSize.width)}×${Math.round(originalPageSize.height)})`,
+        width: originalPageSize.width,
+        height: originalPageSize.height,
+      })
+    }
+  }
+
+  const activePreset = firstPage
+    ? (presets.find(
+        (p) =>
+          Math.abs(p.width - firstPage.width) <= 5 &&
+          Math.abs(p.height - firstPage.height) <= 5
+      )?.id ?? 'custom')
+    : 'custom'
 
   const onPickPreset = (id: string) => {
-    const preset = PAGE_PRESETS.find((p) => p.id === id)
-    if (preset) newDocument({ width: preset.width, height: preset.height })
+    if (id === 'custom') return
+    const preset = presets.find((p) => p.id === id)
+    if (preset) setPageSize(preset.width, preset.height)
   }
 
   const onImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -270,9 +300,9 @@ function DocumentPanel() {
     setBusy(true)
     try {
       const result = await importPdf(file)
-      loadDocument(result.nodes, result.pageWidth, result.pageHeight)
-      if (result.pageCount > 1) {
-        setError(`Imported page 1 of ${result.pageCount}. Multi-page import is coming soon.`)
+      loadDocument(result.nodes, result.pageWidth, result.pageHeight, result.pages)
+      if (result.pageCount > result.importedPages) {
+        setError(`Imported first ${result.importedPages} pages of ${result.pageCount}.`)
       }
     } catch (err) {
       console.error(err)
@@ -292,14 +322,14 @@ function DocumentPanel() {
             onChange={(e) => onPickPreset(e.target.value)}
             className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
           >
-            {PAGE_PRESETS.map((p) => (
+            {presets.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label} ({Math.round(p.width)}×{Math.round(p.height)})
               </option>
             ))}
             {activePreset === 'custom' && (
               <option value="custom">
-                Custom ({Math.round(pageWidth)}×{Math.round(pageHeight)})
+                Custom ({Math.round(firstPage?.width ?? pageWidth)}×{Math.round(firstPage?.height ?? pageHeight)})
               </option>
             )}
           </select>
@@ -342,10 +372,6 @@ function DocumentPanel() {
 export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
   const nodes = useEditorStore((s) => s.nodes)
   const selectedIds = useEditorStore((s) => s.selectedIds)
-  const deleteSelected = useEditorStore((s) => s.deleteSelected)
-  const duplicateSelected = useEditorStore((s) => s.duplicateSelected)
-  const bringToFront = useEditorStore((s) => s.bringToFront)
-  const sendToBack = useEditorStore((s) => s.sendToBack)
 
   const selected = nodes.filter((n) => selectedIds.includes(n.id))
   const single = selected.length === 1 ? selected[0] : null
@@ -379,38 +405,6 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
                 : 'Properties'}
           </h2>
           <div className="flex items-center gap-1">
-            {selected.length > 0 && (
-              <>
-                <button
-                  onClick={() => duplicateSelected()}
-                  title="Duplicate"
-                  className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
-                >
-                  <Copy size={15} />
-                </button>
-                <button
-                  onClick={() => bringToFront()}
-                  title="Bring to front"
-                  className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
-                >
-                  <BringToFront size={15} />
-                </button>
-                <button
-                  onClick={() => sendToBack()}
-                  title="Send to back"
-                  className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
-                >
-                  <SendToBack size={15} />
-                </button>
-                <button
-                  onClick={() => deleteSelected()}
-                  title="Delete"
-                  className="text-neutral-400 hover:text-red-500"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </>
-            )}
             {/* Close drawer — mobile only */}
             <button
               onClick={onClose}
@@ -437,14 +431,23 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
             </div>
           )}
 
-          <Section title={`Layers (${nodes.length})`}>
+          <Section title="Layers">
             <div className="flex flex-col gap-0.5">
-              {nodes.length === 0 && (
+              {nodes.filter((n) => {
+                const textVal = (n.text ?? '').trim()
+                return textVal !== '' && textVal !== '.' && textVal !== '•'
+              }).length === 0 && (
                 <p className="text-xs text-neutral-400">Nothing on the page yet</p>
               )}
-              {[...nodes].reverse().map((n) => (
-                <LayerRow key={n.id} node={n} />
-              ))}
+              {[...nodes]
+                .filter((n) => {
+                  const textVal = (n.text ?? '').trim()
+                  return textVal !== '' && textVal !== '.' && textVal !== '•'
+                })
+                .sort((a, b) => a.y - b.y)
+                .map((n) => (
+                  <LayerRow key={n.id} node={n} onClose={onClose} />
+                ))}
             </div>
           </Section>
         </div>

@@ -4,10 +4,11 @@ import { drawNode, loadImage } from '@/lib/render'
 import {
   createNode,
   useEditorStore,
+  PAGE_GAP,
   type EditorNode,
 } from '@/store/editor'
 import type { Tool } from '@open-pdf/types'
-import { Maximize2, Minus, Plus } from 'lucide-react'
+import { Maximize2, Minus, Pencil, Plus } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const HANDLE_SIZE = 8
@@ -102,6 +103,7 @@ export function Canvas() {
   } | null>(null)
 
   const [cursor, setCursor] = useState('default')
+  const [activePage, setActivePage] = useState(0)
 
   const editingId = useEditorStore((s) => s.editingId)
   const nodes = useEditorStore((s) => s.nodes)
@@ -109,6 +111,32 @@ export function Canvas() {
   const panX = useEditorStore((s) => s.panX)
   const panY = useEditorStore((s) => s.panY)
   const docVersion = useEditorStore((s) => s.docVersion)
+  const pages = useEditorStore((s) => s.pages)
+
+  // Track active page based on vertical viewport intersection
+  useEffect(() => {
+    if (pages.length <= 1) return
+
+    let cumulativeHeight = 0
+    let detectedIndex = 0
+    const el = containerRef.current
+    const viewportCenter = el ? el.clientHeight / 2 : 300
+    
+    let minDistance = Infinity
+    for (let i = 0; i < pages.length; i++) {
+      const pg = pages[i]!
+      const pageHeight = pg.height
+      const pageCenterWorld = cumulativeHeight + pageHeight / 2
+      const pageCenterScreen = pageCenterWorld * zoom + panY
+      const dist = Math.abs(pageCenterScreen - viewportCenter)
+      if (dist < minDistance) {
+        minDistance = dist
+        detectedIndex = i
+      }
+      cumulativeHeight += pageHeight + PAGE_GAP
+    }
+    setActivePage(detectedIndex)
+  }, [panY, zoom, pages])
 
   // Convert a pointer event to world (page) coordinates
   const toWorld = useCallback((clientX: number, clientY: number) => {
@@ -198,19 +226,29 @@ export function Canvas() {
       ctx.translate(s.panX, s.panY)
       ctx.scale(s.zoom, s.zoom)
 
-      // Page with shadow
-      ctx.save()
-      ctx.shadowColor = 'rgba(0,0,0,0.4)'
-      ctx.shadowBlur = 24
-      ctx.shadowOffsetY = 6
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, s.pageWidth, s.pageHeight)
-      ctx.restore()
+      // Draw each page as a separate white rectangle with shadow
+      let pageY = 0
+      for (let i = 0; i < s.pages.length; i++) {
+        const pg = s.pages[i]!
+        ctx.save()
+        ctx.shadowColor = 'rgba(0,0,0,0.35)'
+        ctx.shadowBlur = 20
+        ctx.shadowOffsetY = 4
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, pageY, pg.width, pg.height)
+        ctx.restore()
+        pageY += pg.height + PAGE_GAP
+      }
 
-      // Clip node content to the page
+      // Clip node content to each page and draw nodes
       ctx.save()
       ctx.beginPath()
-      ctx.rect(0, 0, s.pageWidth, s.pageHeight)
+      pageY = 0
+      for (let i = 0; i < s.pages.length; i++) {
+        const pg = s.pages[i]!
+        ctx.rect(0, pageY, pg.width, pg.height)
+        pageY += pg.height + PAGE_GAP
+      }
       ctx.clip()
       for (const node of s.nodes) {
         if (node.id === s.editingId && node.type === 'text') continue // hidden while editing
@@ -421,6 +459,11 @@ export function Canvas() {
       if (hit) {
         if (e.shiftKey) {
           s.toggleSelection(hit.id)
+        } else if (s.selectedIds.includes(hit.id) && s.selectedIds.length === 1 && hit.type === 'text') {
+          // Single click on already-selected text node → enter edit mode
+          s.setEditing(hit.id)
+          it.mode = 'idle'
+          return
         } else if (!s.selectedIds.includes(hit.id)) {
           s.select([hit.id])
         }
@@ -474,7 +517,9 @@ export function Canvas() {
           else {
             const hov = hitTest(world)
             s.setHovered(hov?.id ?? null)
-            c = hov ? 'move' : 'default'
+            if (hov) {
+              c = hov.type === 'text' ? 'text' : 'pointer'
+            }
           }
         }
         setCursor(c)
@@ -635,6 +680,13 @@ export function Canvas() {
 
   const editingNode = editingId ? nodes.find((n) => n.id === editingId) : null
 
+  // Compute the selected node for the floating "Edit" button
+  const selectedIds = useEditorStore((s) => s.selectedIds)
+  const selectedNode =
+    selectedIds.length === 1 && !editingId
+      ? nodes.find((n) => n.id === selectedIds[0])
+      : null
+
   // ---- Zoom controls (anchored to the viewport center) ---------------------
   const zoomByFactor = useCallback((factor: number) => {
     const el = containerRef.current
@@ -660,7 +712,7 @@ export function Canvas() {
   return (
     <div
       ref={containerRef}
-      className="relative flex-1 overflow-hidden"
+      className="relative flex-1 overflow-hidden canvas-container"
       style={{ cursor, touchAction: 'none' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -670,12 +722,19 @@ export function Canvas() {
     >
       <canvas ref={canvasRef} className="h-full w-full touch-none" />
 
+      {/* Floating page indicator for multi-page documents */}
+      {pages.length > 1 && (
+        <div className="absolute top-3 left-3 z-20 rounded-md bg-neutral-900/80 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur dark:bg-black/60 shadow">
+          Page {activePage + 1} / {pages.length}
+        </div>
+      )}
+
       {/* Zoom controls. On mobile the toolbar is pinned bottom-center and spans
           nearly full width, so lift the zoom panel above it (plus the device
           safe-area inset). On desktop the toolbar is a left sidebar, so the
           panel rests in the bottom-right corner. */}
       <div
-        className="absolute bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-3 z-20 flex items-center gap-0.5 rounded-lg border border-neutral-200 bg-white/95 p-0.5 shadow-md backdrop-blur md:bottom-3 dark:border-neutral-800 dark:bg-neutral-900/95"
+        className="absolute bottom-3 right-3 z-20 flex items-center gap-0.5 rounded-lg border border-neutral-200 bg-white/95 p-0.5 shadow-md backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95"
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
       >
@@ -713,6 +772,35 @@ export function Canvas() {
         </button>
       </div>
 
+      {/* Floating "Edit" button — appears on the selected node */}
+      {selectedNode && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            const s = useEditorStore.getState()
+            if (selectedNode.type === 'text') {
+              s.setEditing(selectedNode.id)
+            }
+            // For images, the sidebar already has properties.
+            // For other types, selecting is enough to edit via sidebar.
+          }}
+          className="absolute z-30 flex items-center gap-1.5 rounded-full bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white shadow-lg transition-all hover:bg-blue-600 active:scale-95"
+          style={{
+            left: selectedNode.x * zoom + panX + selectedNode.width * zoom / 2,
+            top: selectedNode.y * zoom + panY - 36,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <Pencil size={12} />
+          {selectedNode.type === 'text'
+            ? 'Edit text'
+            : selectedNode.type === 'image'
+              ? 'Edit image'
+              : 'Edit'}
+        </button>
+      )}
+
       <input
         ref={fileInputRef}
         type="file"
@@ -724,6 +812,7 @@ export function Canvas() {
       {editingNode && editingNode.type === 'text' && editingNode.textStyle && (
         <textarea
           autoFocus
+          wrap="off"
           value={editingNode.text ?? ''}
           onChange={(ev) =>
             useEditorStore.getState().updateNode(editingNode.id, { text: ev.target.value })
@@ -748,6 +837,7 @@ export function Canvas() {
             fontWeight: editingNode.textStyle.fontWeight,
             lineHeight: editingNode.textStyle.lineHeight,
             textAlign: editingNode.textStyle.textAlign as React.CSSProperties['textAlign'],
+            whiteSpace: 'pre',
             color:
               editingNode.fill.type === 'solid' && editingNode.fill.color
                 ? editingNode.fill.color
