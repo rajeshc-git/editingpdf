@@ -1,14 +1,6 @@
 import { drawNode, loadImage } from '@/lib/render'
-import { PAGE_HEIGHT, PAGE_WIDTH, PAGE_GAP, useEditorStore, type EditorNode } from '@/store/editor'
+import { PAGE_GAP, useEditorStore, type EditorNode } from '@/store/editor'
 
-function pageSize(): { width: number; height: number } {
-  try {
-    const s = useEditorStore.getState()
-    return { width: s.pageWidth || PAGE_WIDTH, height: s.pageHeight || PAGE_HEIGHT }
-  } catch {
-    return { width: PAGE_WIDTH, height: PAGE_HEIGHT }
-  }
-}
 
 // Render a specific page of a multi-page document to an offscreen canvas at the given scale.
 async function renderSinglePage(
