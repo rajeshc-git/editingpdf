@@ -22,17 +22,14 @@ if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
 
 # Include overrides that match how the stack was installed.
 TLS_OVERRIDE="${SCRIPT_DIR}/docker-compose.tls.yml"
-DATA_OVERRIDE="${SCRIPT_DIR}/docker-compose.data.yml"
 _domain="$(sed -n 's/^OPENPDF_DOMAIN=//p' "$ENV_FILE" | head -n1)"
-_with_data="$(sed -n 's/^OPENPDF_WITH_DATA=//p' "$ENV_FILE" | head -n1)"
 compose() {
   local files=(-f "$COMPOSE_FILE")
-  [ "$_with_data" = "true" ] && [ -f "$DATA_OVERRIDE" ] && files+=(-f "$DATA_OVERRIDE")
   [ -n "$_domain" ] && [ -f "$TLS_OVERRIDE" ] && files+=(-f "$TLS_OVERRIDE")
   $SUDO docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
 }
 
-APP_SERVICES="web api-gateway pdf-engine"
+APP_SERVICES="web"
 
 cmd="${1:-status}"; shift || true
 

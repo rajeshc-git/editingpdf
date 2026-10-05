@@ -14,10 +14,8 @@
 #   --domain <fqdn>          Serve HTTPS for this domain (omit for HTTP-only).
 #   --email <addr>           ACME contact email (required when --domain is set).
 #   --http-port <port>       Host port Caddy listens on in proxied/HTTP-only mode
-#                            (default 80). Point your provider's reverse proxy here.
+#                            (default 5000). Point your provider's reverse proxy here.
 #   --ssh-port <port>        SSH port to keep open in the firewall (default 22).
-#   --with-data              Also run the datastores (PostgreSQL/Redis/NATS/MinIO).
-#                            Off by default; the current app does not use them.
 #   --no-firewall            Skip firewall configuration.
 #   --non-interactive        Never prompt; fail if a required input is missing.
 #   -h, --help               Show this help.
@@ -27,10 +25,7 @@
 #     Encrypt certificate and serves 80 + 443 directly. DNS for the domain must
 #     point at this VPS.
 #   * Behind a managed proxy: omit --domain. The stack serves plain HTTP on
-#     --http-port and your VPS provider's reverse proxy handles the domain + SSL.
-#
-# Secrets may be supplied via environment variables (POSTGRES_PASSWORD,
-# JWT_SECRET, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD); otherwise they are generated.
+#     --http-port (default 5000) and your VPS provider's reverse proxy handles the domain + SSL.
 
 set -euo pipefail
 
@@ -39,7 +34,6 @@ ENV_FILE="${SCRIPT_DIR}/.env"
 CADDYFILE="${SCRIPT_DIR}/Caddyfile"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.prod.yml"
 TLS_OVERRIDE="${SCRIPT_DIR}/docker-compose.tls.yml"
-DATA_OVERRIDE="${SCRIPT_DIR}/docker-compose.data.yml"
 
 # ---------------------------------------------------------------------------
 # Logging helpers
@@ -54,13 +48,10 @@ fatal() { printf '\033[0;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 DOMAIN="${OPENPDF_DOMAIN:-}"
 ACME_EMAIL="${OPENPDF_ACME_EMAIL:-}"
-HTTP_PORT="${OPENPDF_HTTP_PORT:-80}"
+HTTP_PORT="${OPENPDF_HTTP_PORT:-5000}"
 SSH_PORT="${OPENPDF_SSH_PORT:-22}"
-WITH_DATA="${OPENPDF_WITH_DATA:-false}"
 SKIP_FIREWALL="${OPENPDF_SKIP_FIREWALL:-false}"
 NONINTERACTIVE="${OPENPDF_NONINTERACTIVE:-false}"
-
-DATASTORE_PORTS="5432 6379 4222 8222 9000 9001"
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -69,7 +60,6 @@ parse_args() {
       --email)          ACME_EMAIL="$2"; shift 2 ;;
       --http-port)      HTTP_PORT="$2"; shift 2 ;;
       --ssh-port)       SSH_PORT="$2"; shift 2 ;;
-      --with-data)      WITH_DATA="true"; shift ;;
       --no-firewall)    SKIP_FIREWALL="true"; shift ;;
       --non-interactive) NONINTERACTIVE="true"; shift ;;
       -h|--help)        awk 'NR>1 && /^#/{sub(/^# ?/,"");print;next} NR>1{exit}' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -112,7 +102,6 @@ assert_privileges() {
 # Phase: config resolution
 # ---------------------------------------------------------------------------
 prompt() {
-  # prompt <var> <message> <default>
   local __var="$1" __msg="$2" __def="${3:-}" __ans=""
   if [ "$NONINTERACTIVE" = "true" ]; then
     printf -v "$__var" '%s' "$__def"
@@ -129,7 +118,7 @@ prompt() {
 
 resolve_config() {
   if [ "$NONINTERACTIVE" != "true" ] && [ -z "$DOMAIN" ] && [ -z "${OPENPDF_DOMAIN+x}" ]; then
-    prompt DOMAIN "Domain name for HTTPS (leave empty for HTTP-only on the server IP)" ""
+    prompt DOMAIN "Domain name for HTTPS (leave empty for HTTP-only on port 5000)" ""
   fi
   if [ -n "$DOMAIN" ] && [ -z "$ACME_EMAIL" ]; then
     prompt ACME_EMAIL "ACME contact email for Let's Encrypt" ""
@@ -143,18 +132,11 @@ resolve_config() {
   fi
 
   if [ -n "$DOMAIN" ]; then
-    # Self-managed HTTPS: Caddy needs host port 80 (ACME + redirect) and 443.
     HTTP_PUBLISH=80
     ok "Configuration resolved: self-managed HTTPS for '${DOMAIN}' (Caddy issues the certificate)."
   else
-    # Behind a managed proxy / HTTP-only: serve on the chosen port.
     HTTP_PUBLISH="$HTTP_PORT"
-    ok "Configuration resolved: HTTP-only on port ${HTTP_PORT} (point your provider's reverse proxy here)."
-  fi
-  if [ "$WITH_DATA" = "true" ]; then
-    log "Datastores enabled (PostgreSQL/Redis/NATS/MinIO)."
-  else
-    log "Lean mode: datastores disabled (api-gateway does not use them yet). Use --with-data to enable."
+    ok "Configuration resolved: HTTP-only on port ${HTTP_PORT}."
   fi
 }
 
@@ -201,70 +183,20 @@ verify_docker() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase: secrets
+# Phase: environment file
 # ---------------------------------------------------------------------------
-gen_secret() {
-  # 48 base64 bytes -> trimmed to a URL-safe >=32 char token (>=256 bits).
-  openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 48
-}
-
-read_env_value() {
-  # read_env_value <KEY> ; echoes value from existing ENV_FILE or empty
-  [ -f "$ENV_FILE" ] || return 0
-  sed -n "s/^$1=//p" "$ENV_FILE" | head -n1
-}
-
-is_insecure() {
-  # is_insecure <value> -> returns 0 (true) if insecure
-  local v="$1"
-  case "$v" in openpdf|openpdf123) return 0 ;; esac
-  [ "${#v}" -lt 12 ] && return 0
-  return 1
-}
-
-resolve_secret() {
-  # resolve_secret <KEY> <supplied-or-empty>
-  local key="$1" supplied="$2" existing
-  if [ -n "$supplied" ]; then
-    is_insecure "$supplied" && fatal "secrets: supplied value for ${key} is insecure (default or <12 chars); aborting without changing ${ENV_FILE}."
-    printf '%s' "$supplied"; return
-  fi
-  existing="$(read_env_value "$key")"
-  if [ -n "$existing" ]; then printf '%s' "$existing"; return; fi
-  gen_secret
-}
-
-provision_secrets() {
-  command -v openssl >/dev/null 2>&1 || fatal "secrets: openssl is required to generate secrets."
-
-  local pg_user pg_db pg_pass minio_user minio_pass jwt
-  pg_user="$(read_env_value POSTGRES_USER)"; pg_user="${pg_user:-openpdf_app}"
-  pg_db="$(read_env_value POSTGRES_DB)"; pg_db="${pg_db:-openpdf}"
-  pg_pass="$(resolve_secret POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}")"
-  minio_user="$(resolve_secret MINIO_ROOT_USER "${MINIO_ROOT_USER:-}")"
-  minio_pass="$(resolve_secret MINIO_ROOT_PASSWORD "${MINIO_ROOT_PASSWORD:-}")"
-  jwt="$(resolve_secret JWT_SECRET "${JWT_SECRET:-}")"
-
-  local tmp; tmp="$(mktemp "${SCRIPT_DIR}/.env.XXXXXX")" || fatal "secrets: cannot create temp file."
+write_env() {
+  local tmp; tmp="$(mktemp "${SCRIPT_DIR}/.env.XXXXXX")" || fatal "cannot create temp file."
   chmod 0600 "$tmp"
   cat >"$tmp" <<EOF
-POSTGRES_USER=${pg_user}
-POSTGRES_DB=${pg_db}
-POSTGRES_PASSWORD=${pg_pass}
-MINIO_ROOT_USER=${minio_user}
-MINIO_ROOT_PASSWORD=${minio_pass}
-JWT_SECRET=${jwt}
 NODE_ENV=production
 OPENPDF_DOMAIN=${DOMAIN}
 OPENPDF_ACME_EMAIL=${ACME_EMAIL}
-OPENPDF_WITH_DATA=${WITH_DATA}
 HTTP_PUBLISH=${HTTP_PUBLISH}
-NEXT_PUBLIC_API_URL=/api
-NEXT_PUBLIC_PDF_ENGINE_URL=/pdf
 EOF
-  mv -f "$tmp" "$ENV_FILE" || fatal "secrets: failed to write ${ENV_FILE}."
+  mv -f "$tmp" "$ENV_FILE" || fatal "failed to write ${ENV_FILE}."
   chmod 0600 "$ENV_FILE"
-  ok "Secrets resolved and written to ${ENV_FILE} (0600)."
+  ok "Environment configured: ${ENV_FILE}."
 }
 
 # ---------------------------------------------------------------------------
@@ -279,12 +211,6 @@ render_caddyfile() {
 
 ${DOMAIN} {
 	encode gzip zstd
-	handle_path /pdf/* {
-		reverse_proxy pdf-engine:3001
-	}
-	handle /api/* {
-		reverse_proxy api-gateway:8080
-	}
 	handle {
 		reverse_proxy web:3000
 	}
@@ -295,12 +221,6 @@ EOF
     cat >"$CADDYFILE" <<'EOF'
 :80 {
 	encode gzip zstd
-	handle_path /pdf/* {
-		reverse_proxy pdf-engine:3001
-	}
-	handle /api/* {
-		reverse_proxy api-gateway:8080
-	}
 	handle {
 		reverse_proxy web:3000
 	}
@@ -349,57 +269,23 @@ configure_firewall() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase: swap safety net (low-RAM hosts building images locally)
-# ---------------------------------------------------------------------------
-ensure_swap() {
-  local mem_kb swap_kb mem_mb
-  mem_kb="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-  swap_kb="$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-  mem_mb=$(( mem_kb / 1024 ))
-
-  # Plenty of RAM, or swap already configured -> nothing to do.
-  [ "$mem_mb" -ge 3000 ] && return 0
-  [ "$swap_kb" -gt 0 ] && { ok "Swap already present; skipping swapfile creation."; return 0; }
-
-  warn "Detected ${mem_mb}MB RAM and no swap. Building images locally may run out of memory."
-  if [ -e /swapfile ]; then
-    warn "/swapfile already exists; not recreating."
-    return 0
-  fi
-  log "Creating a 2G swapfile to make local builds reliable..."
-  if $SUDO fallocate -l 2G /swapfile 2>/dev/null || $SUDO dd if=/dev/zero of=/swapfile bs=1M count=2048 2>/dev/null; then
-    $SUDO chmod 600 /swapfile
-    $SUDO mkswap /swapfile >/dev/null
-    $SUDO swapon /swapfile
-    if ! grep -q '^/swapfile ' /etc/fstab 2>/dev/null; then
-      echo '/swapfile none swap sw 0 0' | $SUDO tee -a /etc/fstab >/dev/null
-    fi
-    ok "2G swap enabled (persisted in /etc/fstab)."
-  else
-    warn "Could not create swapfile; continuing without it. If the build is killed, add swap manually and re-run."
-  fi
-}
-
-# ---------------------------------------------------------------------------
 # Phase: compose up + readiness
 # ---------------------------------------------------------------------------
 compose() {
   local files=(-f "$COMPOSE_FILE")
-  [ "$WITH_DATA" = "true" ] && files+=(-f "$DATA_OVERRIDE")
   [ -n "$DOMAIN" ] && files+=(-f "$TLS_OVERRIDE")
   $SUDO docker compose --env-file "$ENV_FILE" "${files[@]}" "$@"
 }
 
 start_stack() {
-  log "Building images locally and starting the stack (first run may take several minutes)..."
+  log "Building web container locally and starting the stack..."
   compose up -d --build || fatal "deploy: 'compose up --build' failed."
 }
 
 wait_ready() {
-  local services="caddy web api-gateway pdf-engine"
-  [ "$WITH_DATA" = "true" ] && services="$services postgres redis nats minio"
-  local deadline=$(( $(date +%s) + 600 ))
-  log "Waiting for services to become healthy (up to 600s)..."
+  local services="caddy web"
+  local deadline=$(( $(date +%s) + 300 ))
+  log "Waiting for services to become healthy..."
   while [ "$(date +%s)" -lt "$deadline" ]; do
     local not_ready=""
     for s in $services; do
@@ -417,9 +303,9 @@ wait_ready() {
       ok "All services are running."
       return
     fi
-    sleep 5
+    sleep 3
   done
-  warn "Some services did not reach a running state within 600s:${not_ready:-}"
+  warn "Some services did not reach a running state:${not_ready:-}"
   compose ps || true
   fatal "deploy: timed out waiting for:${not_ready:-}"
 }
@@ -435,7 +321,6 @@ print_summary() {
     local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     log "Serving plain HTTP on port ${HTTP_PORT}."
     log "Direct check: http://${ip:-<server-ip>}:${HTTP_PORT}"
-    log "Now point your provider's reverse proxy (domain + SSL) at this VPS on port ${HTTP_PORT}."
   fi
   log "Manage with: deploy/openpdf {logs|status|update|down}"
 }
@@ -450,10 +335,9 @@ main() {
   resolve_config
   install_docker
   verify_docker
-  provision_secrets
+  write_env
   render_caddyfile
   configure_firewall
-  ensure_swap
   start_stack
   wait_ready
   print_summary

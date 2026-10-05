@@ -1,153 +1,152 @@
 # EditingPDF
 
-A browser-based PDF editor with a Figma-like experience, served at **[editingpdf.in](https://editingpdf.in)**.
+<p align="center">
+  <strong>A high-performance, browser-based PDF editor with a Figma-like canvas experience.</strong>
+  <br />
+  <span>Live at <a href="https://editingpdf.in">editingpdf.in</a></span>
+</p>
 
-## Architecture
-
-```
-apps/
-  web/           # Next.js frontend with canvas-based editor
-  api-gateway/   # Go API gateway (Fiber)
-  pdf-engine/    # Rust PDF rendering engine (Actix-web)
-
-packages/
-  types/         # Shared TypeScript types
-  editor-core/   # Scene graph, spatial index, command manager
-  ui/            # UI components
-
-deploy/          # Production deployment (Docker, one-command installer)
-```
-
-## Tech Stack
-
-- **Frontend**: Next.js 15, React 18, TypeScript, TailwindCSS, Zustand
-- **Backend**: Go 1.22, Fiber
-- **PDF Engine**: Rust, Actix-web
-- **Infrastructure**: Docker Compose, Caddy (auto-HTTPS), PostgreSQL, Redis, NATS, MinIO
+<p align="center">
+  <img src="https://img.shields.io/badge/Next.js_15-000000?style=for-the-badge&logo=nextdotjs&logoColor=white" alt="Next.js" />
+  <img src="https://img.shields.io/badge/React_18-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React" />
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS" />
+  <img src="https://img.shields.io/badge/Zustand-443E38?style=for-the-badge&logo=react&logoColor=white" alt="Zustand" />
+  <img src="https://img.shields.io/badge/Bun_1.4.2-000000?style=for-the-badge&logo=bun&logoColor=white" alt="Bun" />
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Caddy-1F88C0?style=for-the-badge&logo=caddy&logoColor=white" alt="Caddy" />
+  <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="License" />
+</p>
 
 ---
 
-## Deploy to a VPS (one command)
+## ⚡ Overview
 
-This is the path for your workflow: push to GitHub → clone on your Linux VPS → run **one** command. The host only needs **Docker** — the installer adds it if it's missing. You do **not** install Node, pnpm, Go, or Rust on the VPS.
+EditingPDF brings modern collaborative canvas editing tools to PDF documents. Edit, annotate, transform, and arrange pages with low-latency rendering and pixel-perfect precision.
 
-### Prerequisites
+### Key Features
+- **Figma-like Canvas**: Infinite panning, zooming, spatial indexing, and drag-and-drop layer management.
+- **Ultra-Fast Client-Side Engine**: Browser-based PDF rendering via PDF.js and canvas scene graph.
+- **1GB VPS Ready**: Highly optimized, lightweight Docker container that builds in ~30 seconds with Bun 1.4.2 (<500MB memory).
+- **Zero-Config 1-Click Deploy**: Automated installer on port 5000 with optional automatic Let's Encrypt TLS via Caddy.
 
-- A fresh **Ubuntu 22.04 / 24.04** or **Debian 12** VPS with SSH access.
-- Your domain **editingpdf.in** pointed at the VPS public IP (an `A` record). Needed only if you want HTTPS.
+---
 
-### Will 2 GB RAM / 10 GB SSD be enough?
+## 🏗️ Architecture
 
-- **Running the stack: yes.** At idle the containers use roughly **1–1.3 GB RAM** and **~2–3 GB disk**.
-- **Building the images on the VPS: tight.** The Rust and Next.js builds are memory-hungry and can exceed 2 GB RAM and 10 GB disk.
+The repository is organized as a lightweight monorepo:
 
-So pick one of the two options below. **Option A is recommended for a 2 GB box.**
+```
+editingpdf/
+├── apps/
+│   └── web/           # Next.js 15 frontend with canvas-based editor (React 18, Zustand)
+│
+├── packages/
+│   ├── editor-core/   # Scene graph, spatial index (RBush), command manager, undo/redo
+│   ├── ui/            # Reusable design system & UI components
+│   └── types/         # Shared TypeScript interfaces & models
+│
+└── deploy/            # 1-click Linux VPS installer, Caddy reverse proxy & lightweight Compose stack
+```
 
-### Option A — Build on GitHub, pull on the VPS (recommended for 2 GB)
+---
 
-The included GitHub Actions workflow (`.github/workflows/deploy.yml`) builds the three images and pushes them to Docker Hub. The VPS just pulls them — no compiling on the server.
+## 🚀 1-Click Instant Deploy (`install.sh`)
 
-1. **One-time GitHub setup.** In your repo: Settings → Secrets and variables → Actions, add:
-   - `DOCKER_USERNAME` — your Docker Hub username
-   - `DOCKER_PASSWORD` — a Docker Hub access token
+Deploy the entire production stack onto any fresh **Ubuntu 22.04 / 24.04** or **Debian 12** VPS with a single command without any mandatory parameters.
 
-   Pushing to `main` then builds and pushes:
-   `DOCKER_USERNAME/openpdf-web`, `…/openpdf-api-gateway`, `…/openpdf-pdf-engine`.
-
-2. **On the VPS:**
-
-   ```bash
-   git clone https://github.com/<you>/editingpdf.git
-   cd editingpdf
-
-   sudo ./deploy/install.sh \
-     --domain editingpdf.in \
-     --email you@editingpdf.in \
-     --image-source registry \
-     --registry <your-dockerhub-username>
-   ```
-
-That's it. The installer detects the OS, installs Docker if needed, generates strong secrets, configures the firewall (SSH/80/443 only), sets up Caddy with automatic HTTPS for editingpdf.in, pulls the images, and starts everything.
-
-### Option B — Build everything on the VPS (no registry needed)
-
-Simplest to set up (no Docker Hub), but slower and heavier. The installer automatically adds a 2 GB swap file on low-RAM hosts so the build doesn't get killed.
+### Instant Command (Zero Parameters)
 
 ```bash
-git clone https://github.com/<you>/editingpdf.git
+git clone https://github.com/rajeshc-git/editingpdf.git
 cd editingpdf
-
-sudo ./deploy/install.sh --domain editingpdf.in --email you@editingpdf.in
+sudo ./deploy/install.sh
 ```
 
-> The first build can take several minutes and disk usage peaks during the build. If you hit out-of-disk errors on the 10 GB SSD, use Option A instead, or run `docker builder prune -af` after the first successful deploy.
+### What happens automatically:
+1. **OS & Runtime Check**: Verifies Debian/Ubuntu and automatically installs Docker Engine + Compose plugin if not present.
+2. **Interactive Configuration**: Prompts for your domain & ACME email for automatic HTTPS, or press Enter for immediate HTTP-only mode on **port 5000** (`http://<server-ip>:5000`).
+3. **Automated Security & Secrets**: Generates cryptographically secure 256-bit secrets for JWT and internal services.
+4. **Firewall Protection**: Configures UFW to block external access while keeping SSH (`22`) and web traffic open.
+5. **Reverse Proxy & TLS**: Automatically manages Caddy reverse proxy.
+6. **Container Launch**: Builds and starts all microservices with healthchecks.
 
-### No domain yet? (HTTP-only on the IP)
+---
 
-Omit `--domain`; the app is served over plain HTTP on the server IP:
+### Optional Deploy Flags
 
-```bash
-sudo ./deploy/install.sh --image-source registry --registry <your-dockerhub-username>
-```
-
-### Installer options
+Pass flags to customize the deployment or run non-interactively:
 
 | Flag | Description | Default |
-| --- | --- | --- |
-| `--domain <fqdn>` | Serve HTTPS for this domain (auto Let's Encrypt) | _empty → HTTP-only_ |
-| `--email <addr>` | ACME contact email (required with `--domain`) | — |
+| :--- | :--- | :--- |
+| `--domain <fqdn>` | Public domain for auto-HTTPS (e.g., `editingpdf.in`) | _Empty (HTTP on port 5000)_ |
+| `--email <addr>` | ACME contact email for Let's Encrypt certificates | _Required with `--domain`_ |
+| `--http-port <port>` | Port Caddy listens on for HTTP-only / proxy mode | `5000` |
 | `--ssh-port <port>` | SSH port kept open in the firewall | `22` |
-| `--image-source <build\|registry>` | Build images locally, or pull prebuilt | `build` |
-| `--registry <namespace>` | Docker Hub username (with `registry`) | — |
-| `--tag <tag>` | Image tag (with `registry`) | `latest` |
-| `--no-firewall` | Skip firewall configuration | _off_ |
-| `--non-interactive` | Never prompt; fail if a required input is missing | _off_ |
+| `--with-data` | Also enable datastores (PostgreSQL, Redis, NATS, MinIO) | `false` (Lean mode) |
+| `--no-firewall` | Skip automatic UFW firewall configuration | `false` |
+| `--non-interactive` | Run without interactive prompts | `false` |
 
-Secrets are generated automatically. To pin your own, export `POSTGRES_PASSWORD`, `JWT_SECRET`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` before running (each must be ≥12 chars and not a known default).
-
-### Day-to-day operations
+#### Example: Automated HTTPS Deployment
 
 ```bash
-./deploy/openpdf status     # service + health status
-./deploy/openpdf logs       # follow timestamped logs (add a service name to filter)
-./deploy/openpdf update     # git pull + rebuild/pull images + restart (secrets & data preserved)
-./deploy/openpdf restart    # restart services
-./deploy/openpdf down       # stop the stack (named volumes are kept)
+sudo ./deploy/install.sh --domain editingpdf.in --email admin@editingpdf.in
 ```
 
-### What gets exposed
+#### Example: Non-Interactive HTTP Deployment
 
-Only Caddy publishes ports **80** and **443**. PostgreSQL, Redis, NATS, and MinIO stay on a private Docker network and are never published to the public interface. The firewall (ufw) defaults to deny-inbound and allows only SSH, 80, and 443.
-
-### Services
-
-| Service     | Exposed | Description            |
-| ----------- | ------- | ---------------------- |
-| Caddy       | 80/443  | Reverse proxy + HTTPS  |
-| Web         | private | Next.js frontend       |
-| API Gateway | private | Go REST API            |
-| PDF Engine  | private | Rust PDF service        |
-| PostgreSQL  | private | Database               |
-| Redis       | private | Cache                  |
-| NATS        | private | Event bus              |
-| MinIO       | private | Object storage         |
+```bash
+sudo ./deploy/install.sh --non-interactive
+```
 
 ---
 
-## Local development
+## 🛠️ Management CLI (`./deploy/openpdf`)
+
+Use the included helper script to manage your production instance:
 
 ```bash
-pnpm install        # install dependencies
-pnpm dev            # start dev servers
-docker compose up -d  # start infrastructure (dev compose at repo root)
-pnpm build          # build all packages
-pnpm lint           # lint
-pnpm test           # test
-pnpm format         # format
+./deploy/openpdf status     # Check container and health status
+./deploy/openpdf logs       # Stream live timestamped logs (or filter: ./deploy/openpdf logs web)
+./deploy/openpdf update     # Git pull + rebuild images + zero-downtime service restart
+./deploy/openpdf restart    # Restart all running services
+./deploy/openpdf down       # Gracefully stop the stack (persisting data volumes)
 ```
 
-> Note: the root `docker-compose.yml` is for **local development** (it exposes datastore ports and uses default credentials). Production uses `deploy/docker-compose.prod.yml` via the installer.
+---
 
-## License
+## 💻 Local Development
 
-MIT
+Run the development environment locally:
+
+```bash
+# 1. Install all dependencies
+bun install
+
+# 2. Start development server with hot-reloading
+bun run dev
+```
+
+### Development Scripts
+
+| Command | Description |
+| :--- | :--- |
+| `bun run dev` | Start Next.js canvas editor in dev mode |
+| `bun run build` | Build all packages and applications |
+| `bun run test` | Run test suites across the workspace |
+| `bun run lint` | Run ESLint across all projects |
+| `bun run format` | Format code using Prettier |
+
+---
+
+## 🔒 Security & Networking
+
+- **Exposed Ports**: Only port `5000` (or `80`/`443` for domain HTTPS) is exposed.
+- **Internal Network**: Web application runs in an isolated Docker container routed by Caddy.
+- **Firewall**: UFW defaults to deny inbound traffic except for SSH and web traffic.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License.

@@ -137,7 +137,7 @@ async function extractPageNodes(
 
       // Extract font family from PDF metadata
       const fontName = String(raw.fontName ?? '')
-      const styleObj = (textContent.styles as Record<string, any>)?.[fontName]
+      const styleObj = (textContent.styles as Record<string, { fontFamily?: string }>)?.[fontName]
       const fontFamily = styleObj?.fontFamily ?? 'sans-serif'
       
       rawItems.push({
@@ -262,6 +262,29 @@ async function extractPageNodes(
     }
   } catch {
     // image extraction failed — keep text nodes
+  }
+
+  // Fallback for scanned / raster PDF pages with no separate text or image nodes:
+  // Render the page to a crisp canvas image so it is immediately visible & editable in the browser!
+  if (nodes.length === 0) {
+    try {
+      const viewport = page.getViewport({ scale: 2 })
+      const canvas = document.createElement('canvas')
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        await page.render({ canvasContext: ctx, viewport }).promise
+        const src = canvas.toDataURL('image/png')
+        const bgNode = createNode('image', 0, yOffset, viewport.width / 2, pageHeight, ++count)
+        bgNode.src = src
+        bgNode.fit = 'fill'
+        bgNode.name = 'Page Background'
+        nodes.push(bgNode)
+      }
+    } catch {
+      // ignore render fallback errors
+    }
   }
 
   // Images should sit beneath text in z-order

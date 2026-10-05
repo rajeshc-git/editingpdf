@@ -176,20 +176,41 @@ function Properties({ node }: { node: EditorNode }) {
 
       {node.type === 'image' && (
         <Section title="Image">
-          <div className="flex gap-1">
-            {(['fill', 'contain', 'cover'] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => set({ fit: f })}
-                className={`flex-1 rounded border px-2 py-1 text-xs capitalize ${
-                  node.fit === f
-                    ? 'border-blue-500 bg-blue-500 text-white'
-                    : 'border-neutral-200 dark:border-neutral-700'
-                }`}
-              >
-                {f}
-              </button>
-            ))}
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-1">
+              {(['fill', 'contain', 'cover'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => set({ fit: f })}
+                  className={`flex-1 rounded border px-2 py-1 text-xs capitalize ${
+                    node.fit === f
+                      ? 'border-blue-500 bg-blue-500 text-white'
+                      : 'border-neutral-200 dark:border-neutral-700'
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700">
+              <Upload size={14} />
+              <span>Replace from Gallery</span>
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  const reader = new FileReader()
+                  reader.onload = (evt) => {
+                    const src = evt.target?.result as string
+                    if (src) set({ src })
+                  }
+                  reader.readAsDataURL(file)
+                }}
+              />
+            </label>
           </div>
         </Section>
       )}

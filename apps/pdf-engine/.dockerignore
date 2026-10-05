@@ -1,7 +1,0 @@
-# Rust build artifacts can be gigabytes locally — never ship them to the daemon.
-target
-Dockerfile
-Makefile
-*.md
-.env
-.env.*

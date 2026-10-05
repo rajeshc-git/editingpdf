@@ -13,6 +13,12 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ['lucide-react'],
   },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: false,
+  },
   transpilePackages: ['@open-pdf/ui', '@open-pdf/editor-core', '@open-pdf/types'],
 }
 

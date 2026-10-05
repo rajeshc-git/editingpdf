@@ -118,6 +118,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             gtag('config', 'G-1P27B9B3BQ');
           `}
         </Script>
+        {/* Google AdSense */}
+        <Script
+          async
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6693461887188722"
+          crossOrigin="anonymous"
+          strategy="afterInteractive"
+        />
         <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="shortcut icon" href="/favicon.ico" />
