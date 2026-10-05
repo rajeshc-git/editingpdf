@@ -90,7 +90,7 @@ services:
     logging: *default-logging
 
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     <<: *default-restart
     command: server /data --console-address ":9001"
     environment:
