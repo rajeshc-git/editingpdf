@@ -61,6 +61,10 @@ export const metadata: Metadata = {
     title: TITLE,
     description: DESCRIPTION,
   },
+  // Google AdSense verification meta tag added natively here:
+  other: {
+    "google-adsense-account": "ca-pub-6693461887188722",
+  },
 }
 
 export const viewport: Viewport = {
